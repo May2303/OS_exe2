@@ -20,7 +20,7 @@ void close_receiver(int sig) {
     (void)sig; //unused parameter warning
     if (receiver_fd != -1) { // Check if the receiver socket fd is valid (not -1)
         close(receiver_fd); // Close the receiver socket fd
-        receiver_fd = -1; // Reset the receiver socket fd to indicate closure
+        kill(0, SIGKILL); // Kill all processes in the current process group
     }
 }
 
@@ -156,7 +156,7 @@ int main(int argc, char *argv[]) {
                 int port = 4050;
                 printf("the port of the server: %d\n", port);
                 new_stdin = create_udp_server(port);
-                sender_fd=new_stdin;
+                receiver_fd=new_stdin;
           //  }
 
             // -t flag
@@ -183,6 +183,8 @@ int main(int argc, char *argv[]) {
                 parse_argument(argv[4] , host, &port);
                 new_stdout = create_udp_client(host, port); 
                 receiver_fd = new_stdout;
+                printf("new_stdout is: %d\n", new_stdout);
+                printf("reciver_fd is: %d\n", receiver_fd);
          //   }
     }
 
@@ -205,13 +207,13 @@ int main(int argc, char *argv[]) {
 
         if (new_stdin != -1) {
         //duplicates the file descriptor new_stdin onto the file descriptor for stdin using dup2
-        dup2(new_stdin, STDIN_FILENO);
-        close(new_stdin);
+           dup2(new_stdin, STDIN_FILENO);
+           close(new_stdin);
         }
         if (new_stdout != -1) {
         //duplicates the file descriptor new_stdout onto the file descriptor for stdout using dup2
-        dup2(new_stdout, STDOUT_FILENO);
-        close(new_stdout);
+            dup2(new_stdout, STDOUT_FILENO);
+            close(new_stdout);
         
         }
         
@@ -219,42 +221,54 @@ int main(int argc, char *argv[]) {
         perror("execvp");
         return 1;
     
-    } else {
-        // Parent process: Wait for client input
-        while (1) {
-            // Once the game program prints "I won" or "I lost", exit the loop
-            // Example:
-            char buffer[1024];
-            ssize_t bytes_received = recvfrom(receiver_fd, buffer, sizeof(buffer), 0, NULL, NULL);
-            if (bytes_received > 0) {
-                buffer[bytes_received] = '\0'; // Null-terminate the received data
-                printf("Received: %s\n", buffer);
-                // Check for game over condition and break the loop if needed
-                if (strcmp(buffer, "I win\n") == 0){
-                    printf("I win\n");
-                    break;
-                } else if(strcmp(buffer, "I lost\n") == 0 ){
-                    printf("I lost\n");
-                    break;
-                }else if( strcmp(buffer, "Error\n") == 0 ) {
-                    printf("You sent invaild move\n");
-                    break;
-                }
+} else {
+    // Parent process: Wait for client input
+    while (1) {
+        // Once the game program prints "I won" or "I lost", exit the loop
+        char buffer[1024];
+        ssize_t bytes_received;
+        
+        
+        if (!receiver_fd){
+            break;
+        }
 
-            } else if (bytes_received == 0) {
-                // Client closed connection
-                printf("Client closed connection\n");
+        // Loop to handle interrupted system calls
+        do {
+            bytes_received = recvfrom(receiver_fd, buffer, sizeof(buffer), 0, NULL, NULL);
+            printf("reciver_fd is: %d\n", receiver_fd); 
+         }
+        while (bytes_received == -1 && errno == EINTR);
+        
+        if (bytes_received > 0) {
+            buffer[bytes_received] = '\0'; // Null-terminate the received data
+            printf("Received: %s\n", buffer);
+            // Check for game over condition and break the loop if needed
+            if (strcmp(buffer, "I win\n") == 0){
+                printf("I win\n");
                 break;
-            } else {
-                // Error in receiving data
-                perror("recvfrom");
+            } else if(strcmp(buffer, "I lost\n") == 0 ){
+                printf("I lost\n");
+                break;
+            } else if( strcmp(buffer, "Error\n") == 0 ) {
+                printf("You sent invalid move\n");
                 break;
             }
-        }
-        // Clean up resources and exit
-        if (receiver_fd != -1) {
-            close_receiver(receiver_fd);
+        } else if (bytes_received == 0) {
+            // Client closed connection
+            printf("Client closed connection\n");
+            break;
+        } else {
+            // Error in receiving data
+            perror("recvfrom");
+            break;
         }
     }
-        return 0;
+    // Clean up resources and exit
+    if (receiver_fd != -1) {
+        close_receiver(receiver_fd);
     }
+}
+
+    return 0; // Add the return statement
+}
