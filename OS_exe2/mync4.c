@@ -139,8 +139,6 @@ int main(int argc, char *argv[]) {
 
 
     char *exec_command = argv[2];
-    int new_stdin = -1;
-    int new_stdout = -1;
 
     signal(SIGCHLD, close_receiver);
     
@@ -155,8 +153,8 @@ int main(int argc, char *argv[]) {
                 //int port = atoi(argv[4] + 4);
                 int port = 4050;
                 printf("the port of the server: %d\n", port);
-                new_stdin = create_udp_server(port);
-                receiver_fd=new_stdin;
+                receiver_fd = create_udp_server(port);
+                
           //  }
 
             // -t flag
@@ -181,10 +179,9 @@ int main(int argc, char *argv[]) {
                 char host[256];
                 int port;
                 parse_argument(argv[4] , host, &port);
-                new_stdout = create_udp_client(host, port); 
-                receiver_fd = new_stdout;
-                printf("new_stdout is: %d\n", new_stdout);
-                printf("reciver_fd is: %d\n", receiver_fd);
+                sender_fd = create_udp_client(host, port); 
+              // printf("new_stdout is: %d\n", new_stdout);
+              //  printf("reciver_fd is: %d\n", receiver_fd);
          //   }
     }
 
@@ -205,15 +202,15 @@ int main(int argc, char *argv[]) {
     else if (pid == 0) {
         // Child process: Execute the game program
 
-        if (new_stdin != -1) {
+        if (receiver_fd != -1) {
         //duplicates the file descriptor new_stdin onto the file descriptor for stdin using dup2
-           dup2(new_stdin, STDIN_FILENO);
-           close(new_stdin);
+           dup2(receiver_fd, STDIN_FILENO);
+           close(receiver_fd);
         }
-        if (new_stdout != -1) {
+        if (receiver_fd != -1) {
         //duplicates the file descriptor new_stdout onto the file descriptor for stdout using dup2
-            dup2(new_stdout, STDOUT_FILENO);
-            close(new_stdout);
+            dup2(receiver_fd, STDOUT_FILENO);
+            close(receiver_fd);
         
         }
         
@@ -223,52 +220,11 @@ int main(int argc, char *argv[]) {
     
 } else {
     // Parent process: Wait for client input
-    while (1) {
-        // Once the game program prints "I won" or "I lost", exit the loop
-        char buffer[1024];
-        ssize_t bytes_received;
-        
-        
-        if (!receiver_fd){
-            break;
-        }
-
-        // Loop to handle interrupted system calls
-        do {
-            bytes_received = recvfrom(receiver_fd, buffer, sizeof(buffer), 0, NULL, NULL);
-            printf("reciver_fd is: %d\n", receiver_fd); 
-         }
-        while (bytes_received == -1 && errno == EINTR);
-        
-        if (bytes_received > 0) {
-            buffer[bytes_received] = '\0'; // Null-terminate the received data
-            printf("Received: %s\n", buffer);
-            // Check for game over condition and break the loop if needed
-            if (strcmp(buffer, "I win\n") == 0){
-                printf("I win\n");
-                break;
-            } else if(strcmp(buffer, "I lost\n") == 0 ){
-                printf("I lost\n");
-                break;
-            } else if( strcmp(buffer, "Error\n") == 0 ) {
-                printf("You sent invalid move\n");
-                break;
-            }
-        } else if (bytes_received == 0) {
-            // Client closed connection
-            printf("Client closed connection\n");
-            break;
-        } else {
-            // Error in receiving data
-            perror("recvfrom");
-            break;
-        }
-    }
-    // Clean up resources and exit
-    if (receiver_fd != -1) {
-        close_receiver(receiver_fd);
-    }
+    int status;
+    wait(&status);
+    if (receiver_fd > 0) close(receiver_fd);
+    if (sender_fd > 0) close(sender_fd);
 }
 
-    return 0; // Add the return statement
+return 0;
 }
