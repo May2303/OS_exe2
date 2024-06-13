@@ -139,51 +139,44 @@ int main(int argc, char *argv[]) {
 
 
     char *exec_command = argv[2];
+    char *host = NULL;
 
     signal(SIGCHLD, close_receiver);
     
     // Go over the args we get to find the relevant flags. 
         
         // -i flag
-       if (strcmp(argv[3], "-i") == 0){
-            printf("argv[3]-flag: %s\n", argv[3]);
-            printf("argv[4]-port server: %s\n", (argv[4]));
-
-          //  if(strncmp(argv[4], "UDPS",4) == 0) {
-                //int port = atoi(argv[4] + 4);
-                int port = 4050;
+       if (strcmp(argv[3], "-i") == 0 && strcmp(argv[5], "-t") == 0 ){
+            //printf("argv[3]-flag: %s\n", argv[3]);
+            //printf("argv[4]-port server: %s\n", (argv[4]));
+                int port = atoi(argv[4] + 4);
                 printf("the port of the server: %d\n", port);
                 receiver_fd = create_udp_server(port);
-                
-          //  }
 
             // -t flag
-           if (strcmp(argv[5], "-t") == 0) {
-                timeout = atoi(argv[6])*6;
+                timeout = atoi(argv[6])*2;
                 printf("Timeout is %d seconds\n", timeout);
 
                 if (timeout > 0) {
                     alarm(timeout);
                     signal(SIGALRM, handle_timeout); // Change handle_alarm to handle_timeout
                 }
-           }
+           
         }   
         
         // -o flag    
-        else if (strcmp(argv[3], "-o") == 0 ){
-            char *arg = argv[4];
-            const char *prefix = "UDPC";
-            printf("argv[3]-flag type: %s\n", argv[3]);
-
-         //   if(strncmp(arg, prefix, 4) == 0){ 
-                char host[256];
-                int port;
-                parse_argument(argv[4] , host, &port);
+        if (strcmp(argv[5], "-o") == 0){
+                char *host = NULL;
+                char *comma = strchr(argv[6], ',');
+                *comma = '\0';
+                host = argv[6]+4;
+                int port= atoi(comma+1);
+               // parse_argument(argv[6] , host, &port);
                 sender_fd = create_udp_client(host, port); 
               // printf("new_stdout is: %d\n", new_stdout);
-              //  printf("reciver_fd is: %d\n", receiver_fd);
-         //   }
-    }
+               //printf("reciver_fd is: %d\n", receiver_fd);
+               printf("Debug: Host = %s, Port = %d\n", host, port); // Debug print
+        }
 
 
    // Split the second argument into program name and arguments
@@ -203,14 +196,18 @@ int main(int argc, char *argv[]) {
         // Child process: Execute the game program
 
         if (receiver_fd != -1) {
-        //duplicates the file descriptor new_stdin onto the file descriptor for stdin using dup2
+        /*
+        redirecting the input of the child process (program being executed)
+          to come from the UDP server if the -i flag was provided.   
+          duplicates the file descriptor new_stdin onto the file descriptor for stdin using dup2
+        */
            dup2(receiver_fd, STDIN_FILENO);
            close(receiver_fd);
         }
-        if (receiver_fd != -1) {
+        if (sender_fd != -1) {
         //duplicates the file descriptor new_stdout onto the file descriptor for stdout using dup2
-            dup2(receiver_fd, STDOUT_FILENO);
-            close(receiver_fd);
+            dup2(sender_fd, STDOUT_FILENO);
+            close(sender_fd);
         
         }
         
