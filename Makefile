@@ -16,8 +16,3 @@ clean:
 
 # Phony targets to avoid conflicts with file names
 .PHONY: all clean $(SUBDIRS)
-
-
-# @ in front of the line supres printing the command
-# $@ means "solving the variable". in line 9, the make command will
-# replace $@ with subdir to execute
