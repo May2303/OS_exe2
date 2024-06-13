@@ -1,162 +1,188 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <unistd.h>
 #include <signal.h>
+#include <sys/wait.h>
 
-int sender_fd = -1;
-int receiver_fd = -1;
-int timeout = 0;
+int timeout = -1;
+int input_uds = 0, output_uds = 0;
+char *input_socket_path = NULL, *output_socket_path = NULL;
+int input_fd = -1, output_fd = -1;
 
-void close_receiver(int sig) {
-    (void)sig;
-    if (receiver_fd != -1) {
-        close(receiver_fd);
+// Function to close the receiver socket
+void close_receiver(int fd) {
+    if (fd != -1) {
+        close(fd);
     }
 }
 
+// Signal handler for timeout
 void handle_timeout(int sig) {
-    (void)sig; //unused parameter warning
-    if (receiver_fd != -1) { // Check if the receiver socket fd is valid (not -1)
-        close(receiver_fd); // Close the receiver socket fd
-        kill(0, SIGKILL); // Kill all processes in the current process group
-    }
+    (void)sig;
+    printf("Timeout reached. Closing connection.\n");
+    close_receiver(input_fd);
+    close_receiver(output_fd);
+    kill(0, SIGKILL);
 }
 
-int create_unix_server(char *path, int type) {
-    int sockfd;
-    struct sockaddr_un addr;
+// Function to create and set up the server Unix domain socket
+void server(const char *socket_path, int *input_fd) {
+    struct sockaddr_un server_addr;
 
-    if ((sockfd = socket(AF_UNIX, type, 0)) == -1) {
+    *input_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (*input_fd < 0) {
         perror("socket");
         exit(EXIT_FAILURE);
     }
 
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sun_family = AF_UNIX;
+    strncpy(server_addr.sun_path, socket_path, sizeof(server_addr.sun_path) - 1);
 
-    if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+    unlink(socket_path); // Remove any previous socket with the same name
+    if (bind(*input_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("bind");
         exit(EXIT_FAILURE);
     }
 
-    receiver_fd = sockfd;
-    printf("Unix domain server socket created at path: %s\n", path);
-    printf("Unix domain server bound to path: %s\n", path);
+    if (listen(*input_fd, 1) < 0) {
+        perror("listen");
+        exit(EXIT_FAILURE);
+    }
 
-    return sockfd;
+    int client_fd = accept(*input_fd, NULL, NULL);
+    if (client_fd < 0) {
+        perror("accept");
+        exit(EXIT_FAILURE);
+    }
+    close(*input_fd);
+    *input_fd = client_fd;
 }
 
-int create_unix_client(char *path, int type) {
-    int sockfd;
-    struct sockaddr_un addr;
+// Function to create and set up the client Unix domain socket
+void client(const char *socket_path, int *output_fd) {
+    struct sockaddr_un server_addr;
 
-    if ((sockfd = socket(AF_UNIX, type, 0)) == -1) {
+    *output_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (*output_fd < 0) {
         perror("socket");
         exit(EXIT_FAILURE);
     }
 
-    memset(&addr, 0, sizeof(addr));
-    addr.sun_family = AF_UNIX;
-    strncpy(addr.sun_path, path, sizeof(addr.sun_path) - 1);
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sun_family = AF_UNIX;
+    strncpy(server_addr.sun_path, socket_path, sizeof(server_addr.sun_path) - 1);
 
-    if (connect(sockfd, (struct sockaddr *)&addr, sizeof(addr)) == -1) {
+    if (connect(*output_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
         perror("connect");
         exit(EXIT_FAILURE);
     }
+}
 
-    printf("Unix domain client socket connected to server at path: %s\n", path);
-    return sockfd;
+// Function to redirect input
+void redirect_in(int fd) {
+    if (fd != -1) {
+        dup2(fd, STDIN_FILENO);
+    }
+}
+
+// Function to redirect output
+void redirect_out(int fd) {
+    if (fd != -1) {
+        dup2(fd, STDOUT_FILENO);
+    }
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 3 || strcmp(argv[1], "-e") != 0) {
-        printf("Usage: %s -e \"<program> <arguments>\" [-i UDSSD<path>] [-o UDSCD<path>] [-t timeout]\n", argv[0]);
-        return 1;
-    }
+    char *exec = NULL;
+    char *output_host = NULL;
+    int output_port = -1;
 
-    printf("Number of arguments: %d\n", argc);
-    printf("Arguments:\n");
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "-e") == 0 && i + 1 < argc) {
+            exec = argv[++i];
+        } 
+        else if (strcmp(argv[i], "-i") == 0 && i + 1 < argc) {
+            char *arg = argv[++i];
 
-    char *exec_command = argv[2];
-    char *path = NULL;
-
-    signal(SIGCHLD, handle_timeout);
-
-    if (argc >= 5) {
-        for (int i = 3; i < argc; i += 2) {
-            if (strcmp(argv[i], "-i") == 0) {
-                path = argv[i + 1] + 5;
-                receiver_fd = create_unix_server(path, SOCK_DGRAM);
-                printf("Unix domain server datagram socket created at path: %s\n", path);
-
-                if (strcmp(argv[i], "-t") == 0) {
-                    timeout = atoi(argv[i + 1]);
-                    printf("Timeout is %d seconds\n", timeout);
-                }
-            
-            } else if (strcmp(argv[i], "-o") == 0) {
-                path = argv[i + 1] + 5;
-                sender_fd = create_unix_client(path, SOCK_DGRAM);
-                printf("Unix domain client datagram socket connected to server at path: %s\n", path);
-            
+            if (strncmp(arg, "UDSS", 4) == 0) {
+                input_uds = 1;
+                input_socket_path = arg + 4;
+            } 
+            else {
+                printf("Invalid input argument\n");
+                exit(EXIT_FAILURE);
             }
+        }
+        else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            char *arg = argv[++i];
+
+            if (strncmp(arg, "UDSC", 4) == 0) {
+                output_uds = 1;
+                output_socket_path = arg + 4;
+            } 
+            else {
+                printf("Invalid output argument\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+        else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
+            timeout = atoi(argv[++i]);
+        } 
+        else {
+            printf("Invalid argument\n");
+            exit(EXIT_FAILURE);
         }
     }
 
-    if (argc >= 7) {
-        for (int i = 3; i < argc; i += 2) {
-            if (strcmp(argv[i], "-i") == 0) {
-                path = argv[i + 1] + 5;
-                receiver_fd = create_unix_server(path, SOCK_STREAM);
-                printf("Unix domain server stream socket created at path: %s\n", path);
-            } else if (strcmp(argv[i], "-o") == 0) {
-                path = argv[i + 1] + 5;
-                sender_fd = create_unix_client(path, SOCK_STREAM);
-                printf("Unix domain client stream socket connected to server at path: %s\n", path);
-            } else if (strcmp(argv[i], "-t") == 0) {
-                timeout = atoi(argv[i + 1]);
-                printf("Timeout is %d seconds\n", timeout);
-            }
-        }
+    if (exec == NULL) {
+        printf("Executable not specified\n");
+        exit(EXIT_FAILURE);
     }
 
-    char *program = strtok(argv[2], " ");
-    char *arguments = strtok(NULL, "");
-    char *new_argv[] = {program, arguments, NULL};
+    if (input_uds) {
+        server(input_socket_path, &input_fd);
+    }
+    
+    if (output_uds) {
+        client(output_socket_path, &output_fd);
+    }
 
-    pid_t pid = fork();
+    if (input_uds) {
+        redirect_in(input_fd);
+    }
+
+    if (output_uds) {
+        redirect_out(output_fd);
+    }
+
+    if (timeout > 0) {
+        signal(SIGALRM, handle_timeout);
+        alarm(timeout);
+    }
+
+    int pid = fork();
     if (pid < 0) {
         perror("fork");
-        return 1;
-    } else if (pid == 0) {
-        if (receiver_fd != -1) {
-            dup2(receiver_fd, STDIN_FILENO);
-            close_receiver(receiver_fd);
-        }
-        if (sender_fd != -1) {
-            dup2(sender_fd, STDOUT_FILENO);
-            close_receiver(sender_fd);
-        }
-
-        execvp(program, new_argv);
-        perror("execvp");
-        return 1;
-    } else {
+        exit(EXIT_FAILURE);
+    } 
+    else if (pid == 0) {
+        execl("/bin/sh", "sh", "-c", exec, NULL);
+        perror("execl");
+        exit(EXIT_FAILURE);
+    } 
+    else {
         int status;
-        if (timeout > 0) {
-            alarm(timeout);
-            signal(SIGALRM, handle_timeout);
-        }
         wait(&status);
-        if (receiver_fd > 0)
-            close_receiver(receiver_fd);
-        if (sender_fd > 0)
-            close_receiver(sender_fd);
+        if (input_fd != -1) {
+            close(input_fd);
+        }
+        if (output_fd != -1) {
+            close(output_fd);
+        }
     }
 
     return 0;
