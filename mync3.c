@@ -131,7 +131,7 @@ int main(int argc, char *argv[]) {
             input_port = atoi(argv[++i] + 4);
             printf("the port is: %d /n",input_port );
             redirect_stdout = 1;
-            redirect_stdout=1;
+            redirect_stdin=1;
         }
     }
 
